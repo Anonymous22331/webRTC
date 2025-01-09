@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Unity WebGL Player | WebRTCProject</title>
+  </head>
+  <body style="text-align: center; padding: 0; border: 0; margin: 0;">
+    <canvas id="unity-canvas" width=960 height=600 tabindex="-1" style="width: 960px; height: 600px; background: #231F20"></canvas>
+    <script src="Build/WebBuild.loader.js"></script>
+    <script>
+      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        var meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
+        document.getElementsByTagName('head')[0].appendChild(meta);
+
+        var canvas = document.querySelector("#unity-canvas");
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        canvas.style.position = "fixed";
+
+        document.body.style.textAlign = "left";
+      }
+
+       let unityInstance = null;
+
+		const script = document.createElement("script");
+		script.src = "Build/WebBuild.loader.js"; 
+		script.onload = () => {
+			createUnityInstance(document.querySelector("#unity-canvas"), {
+				dataUrl: "Build/WebBuild.data.br",
+				frameworkUrl: "Build/WebBuild.framework.js.br",
+				codeUrl: "Build/WebBuild.wasm.br",
+				streamingAssetsUrl: "StreamingAssets",
+				companyName: "DefaultCompany",
+				productName: "WebRTCProject",
+				productVersion: "1.0",
+			}).then((unity) => {
+				unityInstance = unity;
+				console.log("Unity instance initialized successfully.");
+				startConnection();
+			}).catch((error) => {
+				console.error("Failed to initialize Unity instance:", error);
+			});
+		};
+		script.onerror = () => {
+			console.error("Failed to load Unity loader script.");
+		};
+		document.body.appendChild(script);
+
+		let peerConnection;
+		let dataChannel;
+		const socket = new WebSocket('ws://localhost:8080');
+
+		socket.onopen = () => {
+			console.log('WebSocket connection established.');
+		};
+
+		socket.onmessage = (event) => {
+			const message = event.data;
+			const [requestType, requestData] = message.split("!");
+
+			switch (requestType) {
+				case "CANDIDATE":
+					const candidateInit = JSON.parse(requestData);
+					const iceCandidate = new RTCIceCandidate({
+						sdpMid: candidateInit.sdpMid,
+						sdpMLineIndex: candidateInit.sdpMLineIndex,
+						candidate: candidateInit.candidate
+					});
+
+					if (peerConnection) {
+						peerConnection.addIceCandidate(iceCandidate)
+							.then(() => console.log("ICE candidate added successfully."))
+							.catch(err => console.error("Error adding ICE candidate:", err));
+					} else {
+						console.error("PeerConnection is not initialized.");
+					}
+					break;
+
+				default:
+					console.log("Unhandled message:", message);
+					break;
+			}
+		};
+
+		socket.onerror = (error) => {
+			console.error('WebSocket error:', error);
+		};
+
+		async function startConnection() {
+			peerConnection = new RTCPeerConnection();
+
+			const sendIceCandidate = (candidate) => {
+				const candidateInit = {
+					sdpMid: candidate.sdpMid,
+					sdpMLineIndex: candidate.sdpMLineIndex,
+					candidate: candidate.candidate
+				};
+
+				if (socket.readyState === WebSocket.OPEN) {
+					socket.send("CANDIDATE!" + JSON.stringify(candidateInit));
+					console.log("Sent ICE candidate:", candidateInit);
+				} else {
+					console.error("WebSocket is not open. Failed to send ICE candidate.");
+				}
+			};
+
+			peerConnection.onicecandidate = (event) => {
+				if (event.candidate) {
+					sendIceCandidate(event.candidate);
+				}
+			};
+
+			// Create data channel
+			dataChannel = peerConnection.createDataChannel("dataChannel");
+			dataChannel.onopen = () => console.log('Data channel open');
+
+			// Create and send an offer
+			const offer = await peerConnection.createOffer();
+			await peerConnection.setLocalDescription(offer);
+
+			console.log("Offer created and local description set.");
+		}
+		
+		function sendImageToDesktop(base64Image) {
+				console.log(dataChannel.readyState);
+			if (socket.readyState === WebSocket.OPEN) {
+				socket.send("IMAGE!" + base64Image);
+				console.log("Image sent via WebRTC.");
+			} else {
+				console.error("WebSocket is not open.");
+			}
+		}
+
+		function PreviewImageJS(base64Image) {
+			if (typeof unityInstance !== "undefined" && unityInstance) {
+				unityInstance.SendMessage("WebManager", "PreviewImage", base64Image);
+			} else {
+				console.error("Unity instance not initialized.");
+			}
+		}
+
+		function createFileInput() {
+			const input = document.createElement('input');
+			input.type = 'file';
+			input.accept = 'image/*';
+			input.style.display = 'none'; 
+			input.onchange = function (event) {
+				const file = event.target.files[0];
+				const reader = new FileReader();
+
+				reader.onload = function () {
+					const base64String = reader.result.split(',')[1];
+					PreviewImageJS(base64String); 
+				};
+
+				reader.readAsDataURL(file); 
+			};
+
+			document.body.appendChild(input);
+			input.click(); 
+		}
+
+    </script>
+  </body>
+</html>
